@@ -19,7 +19,7 @@ func main() {
 func loadBalance() {
 	client := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
 	key := "wrr"
-	w, err := NewWrr(client, key, []Server{
+	w, err := NewBalancer(client, key, []Server{
 		{
 			Addr:   "https://www.baidu.com",
 			Name:   "baidu",
@@ -47,11 +47,12 @@ func loadBalance() {
 	wg.Wait()
 }
 
-type Wrr struct {
-	cli     *redis.Client
-	key     string
-	servers []Server
-	script  string
+type Balancer struct {
+	cli      *redis.Client
+	key      string
+	servers  []Server
+	script   string
+	scriptId string
 }
 
 type Server struct {
@@ -60,12 +61,12 @@ type Server struct {
 	Weight int
 }
 
-func NewWrr(cli *redis.Client, key string, servers []Server) (*Wrr, error) {
+func NewBalancer(cli *redis.Client, key string, servers []Server) (*Balancer, error) {
 	file, err := fs.ReadFile("wrr.lua")
 	if err != nil {
 		return nil, err
 	}
-	w := &Wrr{
+	b := &Balancer{
 		cli:     cli,
 		key:     key,
 		script:  string(file),
@@ -89,11 +90,21 @@ func NewWrr(cli *redis.Client, key string, servers []Server) (*Wrr, error) {
 		return nil, err
 	}
 	err = cli.ZAdd(context.Background(), key+"_servers", zs...).Err()
-	return w, err
+	if err != nil {
+		return nil, err
+	}
+	b.scriptId, err = cli.ScriptLoad(context.Background(), b.script).Result()
+	return b, err
 }
 
-func (w *Wrr) Next() (string, error) {
-	eval := w.cli.Eval(context.Background(), w.script,
-		[]string{w.key + "_meta", w.key + "_servers"})
-	return eval.Text()
+func (r *Balancer) Next() (next Server, err error) {
+	sli, err := r.cli.EvalSha(context.Background(), r.scriptId,
+		[]string{r.key + "_meta", r.key + "_servers"}).Slice()
+	if err != nil {
+		return
+	}
+	next.Addr = sli[0].(string)
+	next.Name = sli[1].(string)
+	next.Weight = int(sli[2].(int64))
+	return
 }

@@ -5,7 +5,7 @@ local serverNames = redis.call("ZRANGE", servers, 0, -1)
 local serverLen = #serverNames
 
 if serverLen == 0 then
-    return ""
+    return nil
 end
 
 local total = 0
@@ -24,5 +24,7 @@ end
 
 redis.call("ZINCRBY", servers, -total, bestMember)
 local addr = redis.call("HGET", meta, bestMember .. "_addr")
+local weight = redis.call("HGET", meta, bestMember .. "_weight")
+local result = { addr, bestMember, tonumber(weight) }
 
-return addr
+return result
